@@ -1,6 +1,8 @@
 """Bot A: The "Gambling? I'm in!" — wins every time."""
 import random
 
+# In general, works by folding for 20 turns unless it has a great hand to trick bots that learn behavior, then playing ultra aggressive.
+
 BOT_NAME = "Gambling? I'm in!"
 
 four_six_score_bet_range = [0.26, 0.5]
@@ -8,10 +10,14 @@ percent_stack_before_fold = 0.8
 russian_roulette = [0.05, 0.1, 0.2]
 amount_to_call_threshold = 0.3
 all_in_ratio_when_exess = 0.5
-all_in_amount = [1]
-
-
-opponent_all_ins = 0
+all_in_amount = [.99,1,1,1,1]
+good_score_end = 3
+decent_score_end = 6
+money_ratio_to_all_in = 0.8
+ratio_of_all_in = 0.5
+puppy_scalar = 0.5
+great_pair_cutoff = 8
+turnback_cutoff = 70 #I don't expect this to change far was just curious
 
 RANK_MAP = {'2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, 'T':10, 'J':11, 'Q':12, 'K':13, 'A':14}
 
@@ -39,8 +45,14 @@ def seven_two(c1, c2):
     return {c1[0], c2[0]} == {"7", "2"}
 
 def has_one_pair(c1, c2, community_cards=[]):
+    '''do we have at least one pair?'''
     board_ranks = [c[0] for c in community_cards]
-    return c1[0] == c2[0] or c1[0] in board_ranks or c2[0] in board_ranks
+    return (c1[0] == c2[0] or c1[0] in board_ranks or c2[0] in board_ranks)
+
+def has_great_pair(c1, c2, community_cards=[]):
+    '''do we have at least one pair 8 or higher?'''
+    board_ranks = [c[0] for c in community_cards]
+    return (c1[0] == c2[0] and RANK_MAP[c1[0]] >= great_pair_cutoff) or (c1[0] in board_ranks and RANK_MAP[c1[0]] >= great_pair_cutoff ) or (c2[0] in board_ranks and RANK_MAP[c2[0]] >= great_pair_cutoff)
 
 def has_two_pair(c1, c2, community_cards=[]):
     board_ranks = [c[0] for c in community_cards]
@@ -60,6 +72,7 @@ def has_three_of_a_kind(c1, c2, community_cards=[]):
     return board_ranks.count(c1[0]) >= 2 or board_ranks.count(c2[0]) >= 2
 
 def near_straight(c1, c2, community_cards = []):
+    '''could the next card added give us a straight?'''
     ranks = set([RANK_MAP[c1[0]], RANK_MAP[c2[0]]] + [RANK_MAP[c[0]] for c in community_cards])
     if len(set(ranks)) < 4:
         return False
@@ -69,9 +82,18 @@ def near_straight(c1, c2, community_cards = []):
     if 14 in ranks and sum(i in ranks for i in range(2, 5)) >= 3:
         return True
     return False
-    
+
+def pick_mode(state):
+    '''Used to change how aggressive we play based on turn count to fake out bots that learn patterns.'''
+    if state["hand_num"] < 20:
+        return "puppy"
+    elif state["hand_num"] < turnback_cutoff:
+        return "werewolf"
+    else:
+        return "werewolf"
 
 def near_flush(c1, c2, community_cards = []):
+    '''Could the next card added give us a flush?'''
     if (c1[1]!=c2[1]):
         return False
     matching = 2
@@ -101,14 +123,17 @@ def is_flush(c1, c2, community_cards=[]):
 
 
 def how_good_hand(c1, c2, community_cards = []):
+    '''Defines how good our hand is'''
     if(has_three_of_a_kind(c1, c2, community_cards) or is_straight(c1, c2, community_cards) or is_flush(c1, c2, community_cards) or has_two_pair(c1, c2, community_cards)):
         return "really good"
-    elif(has_one_pair(c1, c2, community_cards) or near_straight(c1, c2, community_cards) or near_flush(c1, c2, community_cards)):
+    elif(has_great_pair(c1, c2, community_cards) or near_straight(c1, c2, community_cards) or near_flush(c1, c2, community_cards)):
         return "good"
+    elif(has_one_pair(c1, c2, community_cards)):
+        return "decent"
     else:
         return "average"
 
-def decide(state, money_ratio_to_all_in = 0.8, ratio_of_all_in = 0.5):
+def decide(state):
     street  = state["street"]
     owed    = state["amount_owed"]
     pot     = state["pot"]
@@ -121,105 +146,157 @@ def decide(state, money_ratio_to_all_in = 0.8, ratio_of_all_in = 0.5):
     n       = len(state["players"])
     players = state["players"]
     player_stacks = [p["stack"] for p in players]
-    an_opponent = list(state["players"].values())[0]
-    all_in_occured = any(a["action"] == "all_in" and a["bot_id"] == state["your_bot_id"] for a in state["action_log"])
-    
+    # an_opponent = list(state["players"].values())[0]
+    all_in_occured = any(a["action"] == "all_in" and a["bot_id"] == state["your_bot_id"] for a in state["action_log"]) # checks if we've all-in'ed this round
+    mode = pick_mode(state)
 
 
-    if (any(a["action"] == "all_in" and a["bot_id"] == an_opponent for a in state["action_log"])):
-         opponent_all_ins += 1
+    if state["type"] == "warmup":
+        return {"action": "check"}
 
-    # if (hand == 100) and (opponent_all_ins > 15):
+    hand_good = how_good_hand(hand[0], hand[1], state["community_cards"]) 
 
     if street == "preflop":
 
-        if stack < 500:
-             return {"action": "all_in"}
-
-        if not state["can_check"]:
-            if hand_rank(hand[0], hand[1]) > 3:
-                if total_bet_this_hand > stack * max(percent_stack_before_fold - hand_rank(hand[0], hand[1]) * .1, .05):
-                    return {"action": "fold"}
-                else:
-                    return {"action": "call"}
-
-
-        if hand_rank(hand[0], hand[1]) <= 3:
-            if(any(stack > player_stack * money_ratio_to_all_in for player_stack in [p["stack"] for p in players if p["seat"] != seat])):
-                return {"action": "raise", "amount": max(player_stacks)*ratio_of_all_in}
+        if mode == "puppy":
+            '''Bets moderately if great hand, checks/folds otherwise'''
+            if hand_rank(hand[0], hand[1]) <= 2:
+                return {"action": "raise", "amount": (stack*random.uniform(*four_six_score_bet_range)) * puppy_scalar}
+            elif state["can_check"]:
+                return {"action": "check"}
+            elif not state['can_check'] and total_bet_this_hand == state["blinds"]["bb"] and hand_rank(hand[0], hand[1]) <= 4:
+                return {"action": "call"}
             else:
-                return {"action": "raise", "amount": stack * all_in_ratio_when_exess}
+                return {"action": "fold"}
 
-        elif hand_rank(hand[0], hand[1]) <= 6:
-            return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
-        else:
-            if min_bet < stack * .1:
-                return {"action": "raise", "amount": min_bet}
+        if mode == "werewolf":
+            '''Goes all in the hand is good or has low money, bets a random amount if decent, and bets the minimum otherwise.'''
+            if stack < 500:
+                return {"action": "all_in"}
 
-        if state["can_check"]:
-            return {"action": "check"}
-        else:
-            return {"action": "fold"}
+            if not state["can_check"]:
+                if hand_rank(hand[0], hand[1]) > 3:
+                    if total_bet_this_hand > stack * max(percent_stack_before_fold - hand_rank(hand[0], hand[1]) * .1, .05):
+                        return {"action": "fold"}
+                    else:
+                        return {"action": "call"}
+
+
+            if hand_rank(hand[0], hand[1]) <= good_score_end:
+                if(any(stack > player_stack * money_ratio_to_all_in for player_stack in [p["stack"] for p in players if p["seat"] != seat])):
+                    return {"action": "raise", "amount": max(player_stacks)*ratio_of_all_in}
+                else:
+                    return {"action": "raise", "amount": stack * all_in_ratio_when_exess}
+
+            elif hand_rank(hand[0], hand[1]) <= decent_score_end:
+                return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
+            else:
+                if min_bet < stack * .1:
+                    return {"action": "raise", "amount": min_bet}
+
+            if state["can_check"]:
+                return {"action": "check"}
+            else:
+                return {"action": "fold"}
 
 
     elif street == "flop":
-        hand_good = how_good_hand(hand[0], hand[1], state["community_cards"]) 
-
-        if hand_good == "really good":
-                return {"action": "raise", "amount": stack * random.choice(all_in_amount)}
         
-        if state["can_check"]:
-            if hand_good == "good":
-                return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
-            elif seven_two(hand[0], hand[1]):
-                return {"action": "raise", "amount": max(player_stacks) * russian_roulette[0]}
-            else:
-                return {"action": "check"}
+        if mode == "puppy":
+            '''bets moderately if hand is good, checks/folds otherwise'''
+            if state["can_check"]:
+                if hand_good == "good":
+                    return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range) * puppy_scalar}
+                else:
+                    return {"action": "check"}
+                
+            elif not state['can_check']:
+                if total_bet_this_hand < stack * amount_to_call_threshold and hand_good == "good" or all_in_occured or hand_good == "really good": # can tweak this
+                    return {"action": "call"}
             
-        elif not state['can_check']:
-            if total_bet_this_hand < stack * amount_to_call_threshold and hand_good == "good" or all_in_occured: # can tweak this
-                return {"action": "call"}
-        
+
+        if mode == "werewolf":
+            '''Looks at the new card, goes all in if it has something good, bets a random amount if its hand is decent, and checks.folds otherwise.'''
+            if hand_good == "really good":
+                    return {"action": "raise", "amount": stack * random.choice(all_in_amount)}
+            
+            if state["can_check"]:
+                if hand_good == "good":
+                    return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
+                elif seven_two(hand[0], hand[1]):
+                    return {"action": "raise", "amount": max(player_stacks) * russian_roulette[0]}
+                else:
+                    return {"action": "check"}
+                
+            elif not state['can_check']:
+                if total_bet_this_hand < stack * amount_to_call_threshold and hand_good == "good" or all_in_occured or hand_good == "really good": # can tweak this
+                    return {"action": "call"}
+            
         return {"action": "fold"}
 
     elif street == "turn":
-        hand_good = how_good_hand(hand[0], hand[1], state["community_cards"]) 
-        if hand_good == "really good":
-                return {"action": "raise", "amount": stack * random.choice(all_in_amount)}
-        
-        if state["can_check"]:
-                if hand_good == "good":
-                                return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
-                elif seven_two(hand[0], hand[1]):
-                                return {"action": "raise", "amount": max(player_stacks) * russian_roulette[1]}
-                return {"action": "check"}
-        
-        elif not state['can_check']:
-                if total_bet_this_hand < stack * amount_to_call_threshold and hand_good == "good" or all_in_occured: # can tweak this
+        if mode == "puppy":
+            if state["can_check"]:
+                if hand_good == "really good":
+                    return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range) * puppy_scalar}
+                else:
+                    return {"action": "check"}
+                
+            elif not state['can_check']:
+                if total_bet_this_hand < stack * amount_to_call_threshold and hand_good == "good" or all_in_occured or hand_good == "really good": # can tweak this
                     return {"action": "call"}
+                
+        if mode == "werewolf":
+            if hand_good == "really good":
+                    return {"action": "raise", "amount": stack * random.choice(all_in_amount)}
+            
+            if state["can_check"]:
+                    if hand_good == "good":
+                        return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
+                    elif seven_two(hand[0], hand[1]):
+                        return {"action": "raise", "amount": max(player_stacks) * russian_roulette[1]}
+                    return {"action": "check"}
+            
+            elif not state['can_check']:
+                    if total_bet_this_hand < stack * amount_to_call_threshold and hand_good == "good" or all_in_occured or hand_good == "really good": # can tweak this
+                        return {"action": "call"}
 
         return {"action": "fold"}
 
 
     elif street == "river":
-        hand_good = how_good_hand(hand[0], hand[1], state["community_cards"]) 
-        if hand_good == "really good":
-                return {"action": "raise", "amount": stack * random.choice(all_in_amount)}
+        if mode == "puppy":
+                    if state["can_check"]:
+                        if hand_good == "really good":
+                            return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range) * puppy_scalar}
+                        else:
+                            return {"action": "check"}
+                        
+                    elif not state['can_check']:
+                        if total_bet_this_hand < stack * amount_to_call_threshold and (hand_good == "good") or all_in_occured or hand_good == "really good": # can tweak this
+                            return {"action": "call"}
 
-        if state["can_check"]:
-                        if hand_good == "good":
-                                        return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
-                        elif seven_two(hand[0], hand[1]):
-                                        return {"action": "raise", "amount": max(player_stacks) * russian_roulette[1]}
-                        return {"action": "check"}
-        
-        elif not state['can_check']:
+                    return {"action": "fold"}
+
+                    
+        if mode == "werewolf":
+            if hand_good == "really good":
+                    return {"action": "raise", "amount": stack * random.choice(all_in_amount)}
+
+            if state["can_check"]:
+                if hand_good == "good":
+                                return {"action": "raise", "amount": max(player_stacks) * random.uniform(*four_six_score_bet_range)}
+                elif seven_two(hand[0], hand[1]):
+                                return {"action": "raise", "amount": max(player_stacks) * russian_roulette[1]}
+                return {"action": "check"}
+            
+            elif not state['can_check']:
                 if total_bet_this_hand < stack * amount_to_call_threshold and hand_good == "good" or all_in_occured: # can tweak this currently .2
                     return {"action": "call"}
                 else:
                     return {"action": "fold"}
 
-        return {"action": "check"}
+            return {"action": "check"}
 
     elif street == "showdown":
         all_in_occured = False
